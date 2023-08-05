@@ -1,1 +1,1 @@
-# per
+# PER (Personal Expense Tracker)
