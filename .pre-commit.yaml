@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/ambv/black
+    rev: stable
+    hooks:
+      - id: black
+
+  - repo: https://github.com/timothycrosley/isort
+    rev: 5.9.3
+    hooks:
+      - id: isort
+
+  - repo: https://github.com/jazzband/ruff
+    rev: 0.3.0
+    hooks:
+      - id: ruff
