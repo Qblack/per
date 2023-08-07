@@ -1,18 +1,25 @@
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import pendulum
 
 
-def parse_american_express_summary_file(file_path: str, source: str = "American Express"):
+def parse_american_express_summary_file(file_path: str | Path, source: str = "American Express"):
     # TODO check if user is actually presents
     # read_csv_options = {
     #     "has_headers": False,
     #     "new_columns": ["Date", "Place", "Blank", "User", "Amount"],
     #     "skip_rows": 12
     # }
-    df = pd.read_excel(file_path, sheet_name="Summary", headers=False,
-                       names=["Date", "Place", "Blank", "User", "Amount"], skiprows=12)
+    df = pd.read_excel(
+        file_path, "Summary", skiprows=12, names=["Date", "Place", "Blank", "User", "Amount"], header=None
+    )
+    # FYI User column is not present in all files
+
+    if df.Amount.isnull().all():
+        df = df.drop("Amount", axis=1)
+        df = df.rename(columns={"User": "Amount"})
+
     df["Debit"] = 0
     df["Credit"] = 0
     df["Source"] = source
@@ -28,11 +35,12 @@ def parse_american_express_summary_file(file_path: str, source: str = "American 
             row["Debit"] = row["Amount"]
         else:
             row["Credit"] = row["Amount"] * -1
-        row["Date"] = pendulum.from_format(row["Date"], "%d %b %Y")
+        row["Date"] = datetime.strptime(row["Date"], "%d %b %Y").astimezone()
         return row
 
-    df = df.apply(fix_amex, axix=1)
-    df = df.drop("Amount", "Blank")
+    df = df.apply(fix_amex, axis=1)
+    del df["Amount"]
+    del df["Blank"]
     return df
 
 
