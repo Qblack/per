@@ -160,3 +160,7 @@ cython_debug/
 #.idea/
 
 .idea/
+/categories.yml
+/place_mappings.yml
+
+output/

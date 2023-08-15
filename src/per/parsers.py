@@ -35,7 +35,7 @@ def parse_american_express_summary_file(file_path: str | Path, source: str = "Am
             row["Debit"] = row["Amount"]
         else:
             row["Credit"] = row["Amount"] * -1
-        row["Date"] = datetime.strptime(row["Date"], "%d %b %Y").astimezone()
+        row["Date"] = datetime.strptime(row["Date"], "%d %b %Y").replace(tzinfo=None)  # noqa DTZ007
         return row
 
     df = df.apply(fix_amex, axis=1)
