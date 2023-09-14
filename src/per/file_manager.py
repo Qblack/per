@@ -15,15 +15,15 @@ def process_statements(source_dir, category_map, cleanup_map):
         file_path = os.path.join(source_dir, file_name)
         df = pd.DataFrame()
         if "scotia-visa" in file_name.lower():
-            df = parsers.parse_scotia_file(file_path, "SCOTIA-VISA")
+            df = parsers.parse_scotia_file(file_path, "SCOTIA-VISA").to_pandas()
         elif "td-visa" in file_name.lower():
-            df = parsers.parse_td_file(file_path, "TD-VISA")
+            df = parsers.parse_td_file(file_path, "TD-VISA").to_pandas()
         elif "td-cheq" in file_name.lower():
-            df = parsers.parse_td_file(file_path, "TD-CHEQ")
+            df = parsers.parse_td_file(file_path, "TD-CHEQ").to_pandas()
         elif "american-express" in file_name.lower():
-            df = parsers.parse_american_express_summary_file(file_path, "AMERICAN-EXPRESS")
+            df = parsers.parse_american_express_summary_file(file_path, "AMERICAN-EXPRESS").to_pandas()
         elif "rbc" in file_name.lower():
-            df = parsers.parse_rbc_file(file_path, "RBC-VISA")
+            df = parsers.parse_rbc_file(file_path, "RBC-VISA").to_pandas()
         LOG.info("Parsed: %s" % file_name)
         expenses.append(df)
     LOG.info("Parsing complete - Cleaning")
@@ -43,6 +43,7 @@ def process_statements(source_dir, category_map, cleanup_map):
         return row
 
     LOG.info("Adding month, year, day")
+    result["Date"] = pd.to_datetime(result["Date"], format="mixed")
     result = result.apply(add_month, axis=1)
     cols = result.columns.tolist()
     cols = cols[0:1] + [cols[-1]] + cols[1:-1]

@@ -28,7 +28,8 @@ dependencies = [
   "polars",
   "pandas",
   "pendulum",
-  "PyYaml"
+  "PyYaml",
+  "xlsx2csv",
 ]
 
 [project.urls]

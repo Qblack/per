@@ -1,9 +1,11 @@
 import csv
+import math
 import os
 import shutil
 from pathlib import Path
 
 import pandas as pd
+import polars as pl
 import pytest
 from faker import Faker
 
@@ -87,31 +89,11 @@ def rbc_file(request, faker: Faker):
     return file_path
 
 
-@pytest.fixture()
-def amex_file(request, faker: Faker):
-    column_definitions = {
-        "Date": lambda: faker.date_between(start_date="-60d", end_date="today").strftime("%d %b %Y"),
-        "Place": faker.company,
-        "Blank": lambda: "",
-        "User": faker.pystr,
-        "Amount": lambda: faker.random_element(["", "-"]) + faker.pricetag(),
-    }
-
-    file = faker.file_name(extension="xls")
-
+def generate_amex_file(request, faker: Faker):
     original = Path(TEST_DATA_DIR, "American-Express-2023.xls")
-
-    file_path = Path(TEST_DATA_DIR, file)
-
+    file_name = "wusers_" + faker.file_name(extension="xls")
+    file_path = Path(TEST_DATA_DIR, file_name)
     shutil.copyfile(original, file_path)
-
-    df = pd.DataFrame(columns=column_definitions.keys())
-
-    for i in range(13, 100):
-        for col, value in column_definitions.items():
-            df.loc[i, col] = value()
-
-    df.to_excel(file_path, index=False, header=False, startrow=12, sheet_name="Summary")
 
     def teardown():
         os.remove(file_path)
@@ -121,11 +103,10 @@ def amex_file(request, faker: Faker):
     return file_path
 
 
-@pytest.fixture()
-def userless_amex_file(request, faker: Faker):
-    file = faker.file_name(extension="xls")
+def generate_userless_amex_file(request, faker: Faker):
     original = Path(TEST_DATA_DIR, "American-Express-2023-Userless.xls")
-    file_path = Path(TEST_DATA_DIR, file)
+    file_name = "userless_" + faker.file_name(extension="xls")
+    file_path = Path(TEST_DATA_DIR, file_name)
     shutil.copyfile(original, file_path)
 
     def teardown():
@@ -137,7 +118,8 @@ def userless_amex_file(request, faker: Faker):
 
 
 class TestParsers:
-    def test_parse_american_express_summary_file(self, faker: Faker, amex_file):
+    def test_parse_american_express_summary_file(self, request, faker: Faker):
+        amex_file = generate_amex_file(request, faker)
         source = f"Amex-{faker.date()}"
         expected = pd.read_excel(
             amex_file, skiprows=12, parse_dates=[0], header=None, names=["Date", "Place", "Blank", "User", "Amount"]
@@ -154,10 +136,12 @@ class TestParsers:
         expected = expected.Amount.apply(currency_to_float)
         expected_debits = expected[expected > 0].sum()
         expected_credits = expected[expected < 0].sum()
-        assert expected_debits == actual[actual.Debit != 0]["Debit"].sum()
-        assert expected_credits == -1 * actual[actual.Credit != 0]["Credit"].sum()
+        assert math.isclose(expected_debits, actual["Debit"].sum())
+        assert math.isclose(-1 * expected_credits, actual["Credit"].sum())
 
-    def test_parse_american_express_summary_file_no_user_still_works(self, faker: Faker, userless_amex_file):
+    def test_parse_american_express_summary_file_no_user_still_works(self, request, faker: Faker):
+        userless_amex_file = generate_userless_amex_file(request, faker)
+
         source = f"Amex-{faker.date()}"
         expected = pd.read_excel(
             userless_amex_file,
@@ -179,8 +163,8 @@ class TestParsers:
         expected = expected.Amount.apply(currency_to_float)
         expected_debits = expected[expected > 0].sum()
         expected_credits = expected[expected < 0].sum()
-        assert expected_debits == actual[actual.Debit != 0]["Debit"].sum()
-        assert expected_credits == -1 * actual[actual.Credit != 0]["Credit"].sum()
+        assert math.isclose(expected_debits, actual["Debit"].sum())
+        assert math.isclose(expected_credits, -1 * actual["Credit"].sum())
 
     def test_parse_rbc_file(self, faker: Faker, rbc_file):
         source = f"RBC-{faker.date()}"
@@ -193,27 +177,32 @@ class TestParsers:
         assert "Description 2" not in actual
         assert "CAD$" not in actual
         assert "USD$" not in actual
-        assert (actual.Source == source).all()
-        assert (actual.Clean == "").all()
-        assert (actual.Debit >= 0).all()
-        assert (actual.Credit >= 0).all()
+        assert "Amount" not in actual
+
+        assert (actual["Source"] == source).all()
+        assert (actual["Clean"] == "").all()
+        assert (actual["Debit"] >= 0).all()
+        assert (actual["Credit"] >= 0).all()
 
         expected_debits = (
             og_df[og_df["CAD$"] < 0]["CAD$"].sum() + og_df.query("`USD$` < 0 and `CAD$` == 0")["USD$"].sum()
         )
-        assert expected_debits == -1 * actual[actual.Debit != 0]["Debit"].sum()
+        assert expected_debits == -1 * actual["Debit"].sum()
         expected_credits = (
             og_df[og_df["CAD$"] > 0]["CAD$"].sum() + og_df.query("`USD$` > 0 and `CAD$` == 0")["USD$"].sum()
         )
-        assert expected_credits == actual[actual.Credit != 0]["Credit"].sum()
+        assert expected_credits == actual["Credit"].sum()
 
     def test_parse_td_file(self, faker: Faker, td_file):
         source = f"TD-{faker.date()}"
         actual = sut.parse_td_file(td_file, source)
+        og_df = pd.read_csv(
+            td_file, header=None, names=["Date", "Place", "Debit", "Credit", "Balance"], parse_dates=[0]
+        )
 
         assert "Balance" not in actual
-        assert (actual.Source == source).all()
-        assert (actual.Clean == "").all()
+        assert actual.filter(pl.col("Source") == source).shape[0] == len(og_df)
+        assert actual.filter(pl.col("Clean") == "").shape[0] == len(og_df)
 
     def test_parse_scotia_file(self, faker, scotia_file):
         source = f"Scotia-{faker.date()}"
@@ -223,9 +212,10 @@ class TestParsers:
         actual = sut.parse_scotia_file(scotia_file, source)
 
         assert "Amount" not in actual
-        assert (actual.Source == source).all()
-        assert (actual.Clean == "").all()
-        assert (actual.Debit >= 0).all()
-        assert (actual.Credit >= 0).all()
-        assert og_df[og_df.Amount < 0]["Amount"].sum() == -1 * actual[actual.Debit != 0]["Debit"].sum()
-        assert og_df[og_df.Amount > 0]["Amount"].sum() == actual[actual.Credit != 0]["Credit"].sum()
+        assert actual.filter(pl.col("Debit") >= 0).shape[0] == len(og_df)
+        assert actual.filter(pl.col("Credit") >= 0).shape[0] == len(og_df)
+        assert actual.filter(pl.col("Source") == source).shape[0] == len(og_df)
+        assert actual.filter(pl.col("Clean") == "").shape[0] == len(og_df)
+
+        assert math.isclose(og_df[og_df.Amount < 0]["Amount"].sum(), -1 * actual["Debit"].sum())
+        assert math.isclose(og_df[og_df.Amount > 0]["Amount"].sum(), actual["Credit"].sum())

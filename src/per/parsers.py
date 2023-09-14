@@ -2,28 +2,24 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import polars as pl
 
 
-def parse_american_express_summary_file(file_path: str | Path, source: str = "American Express"):
+def parse_american_express_summary_file(file_path: str | Path, source: str = "American Express") -> pl.DataFrame:
     # TODO check if user is actually presents
-    # read_csv_options = {
-    #     "has_headers": False,
-    #     "new_columns": ["Date", "Place", "Blank", "User", "Amount"],
-    #     "skip_rows": 12
-    # }
-    df = pd.read_excel(
-        file_path, "Summary", skiprows=12, names=["Date", "Place", "Blank", "User", "Amount"], header=None
-    )
+
+    df = pd.read_excel(file_path, "Summary", skiprows=11)
+
+    columns_to_keep = ["Date", "Description", "Amount"]
+    columns_to_remove = [col for col in df.columns if col not in columns_to_keep]
+    df = df.drop(columns=columns_to_remove)
+
+    df = pl.from_dataframe(df)
     # FYI User column is not present in all files
 
-    if df.Amount.isnull().all():
-        df = df.drop("Amount", axis=1)
-        df = df.rename(columns={"User": "Amount"})
-
-    df["Debit"] = 0
-    df["Credit"] = 0
-    df["Source"] = source
-    df["Clean"] = ""
+    # if df["Amount"].is_null().all():
+    #     df = df.drop("Amount")
+    #     df = df.rename(columns={"User": "Amount"})
 
     def fix_amex(row):
         try:
@@ -38,60 +34,66 @@ def parse_american_express_summary_file(file_path: str | Path, source: str = "Am
         row["Date"] = datetime.strptime(row["Date"], "%d %b %Y").replace(tzinfo=None)  # noqa DTZ007
         return row
 
-    df = df.apply(fix_amex, axis=1)
-    del df["Amount"]
-    del df["Blank"]
+    df = df.with_columns(
+        pl.col("Date").str.to_date("%d %b %Y").alias("Date"),
+        pl.col("Description").alias("Place"),
+        pl.col("Amount").str.replace(r"\$", "").str.replace(",", "").cast(pl.Float64).alias("Amount"),
+    )
+
+    df = df.with_columns(
+        pl.when(pl.col("Amount") < 0).then(-pl.col("Amount")).otherwise(0).alias("Credit"),
+        pl.when(pl.col("Amount") > 0).then(pl.col("Amount")).otherwise(0).alias("Debit"),
+        pl.lit(source).alias("Source"),
+        pl.lit("").alias("Clean"),
+    )
+
+    df = df.drop("Amount")
     return df
 
 
-def parse_rbc_file(file_path: str | Path, source: str) -> pd.DataFrame:
-    df = pd.read_csv(file_path, parse_dates=[1])
+def parse_rbc_file(file_path: str | Path, source: str) -> pl.DataFrame:
+    df = pl.read_csv(file_path, use_pyarrow=True)
     # , names=['Account Type', 'Date', 'Place', 'Place 2', 'Amount', 'USD$']
-    df = df.rename(columns={"Transaction Date": "Date", "Description 1": "Place"})
+    # Merge cad and usd columns
+    df = df.with_columns(
+        pl.when(pl.col("CAD$").is_null()).then(pl.col("USD$")).otherwise(pl.col("CAD$")).alias("Amount")
+    )
 
-    df["Debit"] = 0
-    df["Credit"] = 0
-    df["Source"] = source
-    df["Clean"] = ""
+    df = df.with_columns(
+        pl.col("Transaction Date").alias("Date"),
+        pl.col("Description 1").alias("Place"),
+        pl.when(pl.col("Amount") > 0).then(pl.col("Amount")).otherwise(0).alias("Credit"),
+        pl.when(pl.col("Amount") < 0).then(-pl.col("Amount")).otherwise(0).alias("Debit"),
+        pl.lit(source).alias("Source"),
+        pl.lit("").alias("Clean"),
+    )
 
-    def fix_rbc(row):
-        value = row["CAD$"] or row["USD$"]
-        if value < 0:
-            row["Debit"] = value * -1
-        else:
-            row["Credit"] = value
-        return row
+    df = df.drop("Amount")
+    df = df.drop("Account Type")
+    df = df.drop("Description 2")
+    df = df.drop("CAD$")
+    df = df.drop("USD$")
 
-    df = df.apply(fix_rbc, axis=1)
-    del df["Account Type"]
-    del df["Description 2"]
-    del df["CAD$"]
-    del df["USD$"]
     return df
 
 
-def parse_td_file(file_path: str | Path, source: str) -> pd.DataFrame:
-    df = pd.read_csv(file_path, header=None, names=["Date", "Place", "Debit", "Credit", "Balance"], parse_dates=[0])
-    del df["Balance"]
-    df["Source"] = source
-    df["Clean"] = ""
+def parse_td_file(file_path: str | Path, source: str) -> pl.DataFrame:
+    df = pl.read_csv(
+        file_path, has_header=False, new_columns=["Date", "Place", "Debit", "Credit", "Balance"], use_pyarrow=True
+    )
+    df = df.drop("Balance")
+    df = df.with_columns(pl.lit(source).alias("Source"), pl.lit("").alias("Clean"))
     return df
 
 
-def parse_scotia_file(file_path: str | Path, source: str) -> pd.DataFrame:
-    df = pd.read_csv(file_path, header=None, names=["Date", "Place", "Amount"], parse_dates=[0])
-    df["Debit"] = 0
-    df["Credit"] = 0
-    df["Source"] = source
-    df["Clean"] = ""
+def parse_scotia_file(file_path: str | Path, source: str) -> pl.DataFrame:
+    df = pl.read_csv(file_path, has_header=False, new_columns=["Date", "Place", "Amount"], use_pyarrow=True)
+    df = df.with_columns(
+        pl.when(pl.col("Amount") < 0).then(-pl.col("Amount")).otherwise(0).alias("Debit"),
+        pl.when(pl.col("Amount") > 0).then(pl.col("Amount")).otherwise(0).alias("Credit"),
+        pl.lit(source).alias("Source"),
+        pl.lit("").alias("Clean"),
+    )
 
-    def fix_scotia(row):
-        if row["Amount"] < 0:
-            row["Debit"] = row["Amount"] * -1
-        else:
-            row["Credit"] = row["Amount"]
-        return row
-
-    df = df.apply(fix_scotia, axis=1)
-    del df["Amount"]
+    df = df.drop("Amount")
     return df
